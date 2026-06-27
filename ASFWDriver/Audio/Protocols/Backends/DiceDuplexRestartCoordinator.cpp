@@ -464,15 +464,22 @@ IOReturn DiceDuplexRestartCoordinator::RunStartStreaming(uint64_t guid) noexcept
     }
 
     DiceRestartSession session = LoadSession(guid);
-    // Honor a clock requested before streaming began (e.g. the user picked a
-    // non-48k rate in Audio MIDI Setup while idle, stored as pendingClock);
-    // otherwise default to 48 kHz internal.
+    // Honor a clock the user selected before streaming began. A rate pick while
+    // idle runs RunIdleClockApply, which persists the rate into desiredClock /
+    // appliedClock (NOT pendingClock) — so resolve all three, newest first,
+    // mirroring the bus-reset rebind path. Without this the start drops the
+    // selected rate and forces 48 kHz, leaving the device clocked at 48k while
+    // the host runs at the picked rate.
     DiceDesiredClockConfig desiredClock{
         .sampleRateHz = 48000U,
         .clockSelect = kDiceClockSelect48kInternal,
     };
     if (IsSupportedClockConfig(session.pendingClock)) {
         desiredClock = session.pendingClock;
+    } else if (IsSupportedClockConfig(session.desiredClock)) {
+        desiredClock = session.desiredClock;
+    } else if (IsSupportedClockConfig(session.appliedClock)) {
+        desiredClock = session.appliedClock;
     }
     const DiceRestartReason reason =
         DICE::HasRestartIntent(session)

@@ -564,13 +564,21 @@ kern_return_t IMPL(ASFWAudioNub, FreeTxIsochResources)
     return ctx->isoch.FreeTxIsochResources();
 }
 
-kern_return_t ASFWAudioNub::RequestSampleRateChange(uint32_t sampleRateHz)
+// Cross-process RPC (AudioDriver -> ASFWDriver process): runs in the nub's own
+// process, so ivars and the parent -> ServiceContext -> AudioCoordinator chain
+// are valid here (a LOCALONLY variant would dereference the audio side's proxy
+// ivars, which are null).
+kern_return_t IMPL(ASFWAudioNub, RequestSampleRateChange)
 {
     if (!ivars) {
+        ASFW_LOG(Audio, "ASFWAudioNub: RequestSampleRateChange not ready (ivars=null)");
         return kIOReturnNotReady;
     }
     auto* coordinator = GetAudioCoordinator(ivars);
     if (!coordinator) {
+        ASFW_LOG(Audio,
+                 "ASFWAudioNub: RequestSampleRateChange not ready (no coordinator) guid=0x%016llx",
+                 ivars->guid);
         return kIOReturnNotReady;
     }
 
@@ -588,8 +596,12 @@ kern_return_t ASFWAudioNub::RequestSampleRateChange(uint32_t sampleRateHz)
     ASFW_LOG(Audio,
              "ASFWAudioNub: RequestSampleRateChange %u Hz clockSelect=0x%08x guid=0x%016llx",
              sampleRateHz, clockSelect, ivars->guid);
-    return coordinator->RequestDiceClockConfig(
+    const kern_return_t kr = coordinator->RequestDiceClockConfig(
         ivars->guid, desired, ASFW::Audio::DICE::DiceRestartReason::kSampleRateChange);
+    if (kr == kIOReturnSuccess) {
+        ivars->currentSampleRateHz = sampleRateHz;
+    }
+    return kr;
 }
 
 void ASFWAudioNub::SetChannelCount(uint32_t channels)

@@ -136,6 +136,12 @@ void DICETcatProtocol::PrepareDuplex(const AudioDuplexChannels& channels,
         return;
     }
 
+    // Remember the live clock so a later per-StartIO PrepareDuplex48k targets it
+    // rather than reverting the device to 48 kHz (see selectedClock_).
+    if (desiredClock.sampleRateHz != 0 && desiredClock.clockSelect != 0) {
+        selectedClock_ = desiredClock;
+    }
+
     duplexCtrl_->PrepareDuplex(
         channels,
         desiredClock,
@@ -185,6 +191,13 @@ void DICETcatProtocol::ApplyClockConfig(const DiceDesiredClockConfig& desiredClo
     if (!initialized_ || !duplexCtrl_) {
         callback(kIOReturnNotReady, {});
         return;
+    }
+
+    // An idle sample-rate change lands here (RunIdleClockApply). Remember it so
+    // the next StartIO's PrepareDuplex48k keeps the device at this rate instead
+    // of rewriting CLOCK_SELECT back to 48 kHz (see selectedClock_).
+    if (desiredClock.sampleRateHz != 0 && desiredClock.clockSelect != 0) {
+        selectedClock_ = desiredClock;
     }
 
     duplexCtrl_->ApplyClockConfig(
@@ -238,11 +251,19 @@ void DICETcatProtocol::ReadDuplexHealth(HealthCallback callback) {
 }
 
 void DICETcatProtocol::PrepareDuplex48k(const AudioDuplexChannels& channels, VoidCallback callback) {
+    // This per-StartIO bring-up must honor the user's selected clock. Using a
+    // hardcoded 48 kHz here rewrites CLOCK_SELECT on every StartIO and fights an
+    // idle 44.1 kHz change (the device PLL flaps 44.1k<->48k and audio starves).
+    // Fall back to 48 kHz only before any rate has been selected.
+    DiceDesiredClockConfig clock = selectedClock_;
+    if (clock.sampleRateHz == 0 || clock.clockSelect == 0) {
+        clock = DiceDesiredClockConfig{
+            .sampleRateHz = 48000U,
+            .clockSelect = kDiceClockSelect48kInternal,
+        };
+    }
     PrepareDuplex(channels,
-                  DiceDesiredClockConfig{
-                      .sampleRateHz = 48000U,
-                      .clockSelect = kDiceClockSelect48kInternal,
-                  },
+                  clock,
                   [callback = std::move(callback)](IOReturn status, DiceDuplexPrepareResult) mutable {
                       callback(status);
                   });

@@ -249,8 +249,22 @@ constexpr void ClearRestartProgress(DiceRestartSession& session,
 
 [[nodiscard]] constexpr bool IsSupportedClockConfig(
     const DiceDesiredClockConfig& desiredClock) noexcept {
-    return desiredClock.sampleRateHz == 48000U &&
-           desiredClock.clockSelect == kDiceClockSelect48kInternal;
+    // Internal clock at a validated 1x rate (32 / 44.1 / 48 kHz). 2x/4x rates
+    // change frames-per-packet and per-stream channel geometry and are not yet
+    // validated end-to-end (see kDiceMaxSupportedRateHz), so they are rejected.
+    const uint32_t source =
+        desiredClock.clockSelect & ClockSelect::kSourceMask;
+    const uint32_t rateIndex =
+        (desiredClock.clockSelect & ClockSelect::kRateMask) >> ClockSelect::kRateShift;
+    if (source != static_cast<uint32_t>(ClockSource::Internal)) {
+        return false;
+    }
+    switch (desiredClock.sampleRateHz) {
+        case 32000U: return rateIndex == ClockRateIndex::k32000;
+        case 44100U: return rateIndex == ClockRateIndex::k44100;
+        case 48000U: return rateIndex == ClockRateIndex::k48000;
+        default:     return false;
+    }
 }
 
 [[nodiscard]] constexpr DiceRestartReason ClassifyRestartReason(

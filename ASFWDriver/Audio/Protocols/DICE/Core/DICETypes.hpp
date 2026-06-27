@@ -483,6 +483,62 @@ namespace ClockRateIndex {
     constexpr uint32_t k192000 = 0x06;
 }
 
+// ----------------------------------------------------------------------------
+// Sample-rate probing / encoding (CLOCKCAPABILITIES 0x64 + CLOCK_SELECT 0x4C).
+// The low 16 bits of CLOCKCAPABILITIES are a rate bitmask (RateCaps::*) and
+// CLOCK_SELECT packs [rate index << 8 | source]. Cross-validated with FFADO
+// dice_defines.h (DICE_CLOCKCAP_RATE_* / DICE_RATE_* / DICE_SET_RATE).
+// ----------------------------------------------------------------------------
+
+/// One standard rate paired with its CLOCKCAPABILITIES bit and CLOCK_SELECT index.
+struct DiceRateMapEntry {
+    uint32_t hz;
+    uint32_t capsBit;     ///< RateCaps:: bit in CLOCKCAPABILITIES[15:0]
+    uint32_t rateIndex;   ///< ClockRateIndex:: value for CLOCK_SELECT[15:8]
+};
+
+inline constexpr DiceRateMapEntry kDiceRateTable[] = {
+    {32000,  RateCaps::k32000,  ClockRateIndex::k32000},
+    {44100,  RateCaps::k44100,  ClockRateIndex::k44100},
+    {48000,  RateCaps::k48000,  ClockRateIndex::k48000},
+    {88200,  RateCaps::k88200,  ClockRateIndex::k88200},
+    {96000,  RateCaps::k96000,  ClockRateIndex::k96000},
+    {176400, RateCaps::k176400, ClockRateIndex::k176400},
+    {192000, RateCaps::k192000, ClockRateIndex::k192000},
+};
+
+/// Highest rate whose isoch stream geometry is currently validated end-to-end.
+/// 1x rates (<=48k) keep the single-DBS, 8-frames-per-packet layout the rest of
+/// the stack assumes. 2x/4x change frames-per-packet and per-stream channel
+/// splits and are NOT yet validated on hardware (FFADO likewise gates 4x), so we
+/// do not advertise them. Raise this once the 2x/4x pipeline is HW-verified.
+inline constexpr uint32_t kDiceMaxSupportedRateHz = 48000;
+
+/// True if CLOCKCAPABILITIES advertises `rateHz`.
+[[nodiscard]] inline bool DiceClockCapsSupportRate(uint32_t clockCaps, uint32_t rateHz) noexcept {
+    for (const auto& e : kDiceRateTable) {
+        if (e.hz == rateHz) {
+            return (clockCaps & e.capsBit) != 0;
+        }
+    }
+    return false;
+}
+
+/// Build the CLOCK_SELECT value for `rateHz` on `source`. Returns false for a
+/// rate not in the standard table.
+[[nodiscard]] inline bool DiceClockSelectForRate(uint32_t rateHz,
+                                                 ClockSource source,
+                                                 uint32_t& outClockSelect) noexcept {
+    for (const auto& e : kDiceRateTable) {
+        if (e.hz == rateHz) {
+            outClockSelect = (e.rateIndex << ClockSelect::kRateShift) |
+                             (static_cast<uint32_t>(source) & ClockSelect::kSourceMask);
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Parsed global section state
 struct GlobalState {
     uint64_t owner{0};           ///< Owner node ID

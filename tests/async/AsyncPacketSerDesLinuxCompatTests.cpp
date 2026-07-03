@@ -348,11 +348,14 @@ TEST(AsyncPacketSerDesLinuxCompat, RequestPayloadIsCopiedIntoAlignedScratchBefor
 TEST(AsyncPacketSerDesLinuxCompat, ExtractTLabelUsesWireByteTwo) {
     // Read quadlet response packet as OHCI AR DMA memory: tLabel=48, tCode=6, rCode=0.
     // After the little-endian quadlet write, memory byte1 holds [tLabel:6][rt:2].
-    const std::array<uint8_t, 16> responseBytes{
+    // The final quadlet is the AR bufferFill trailer (xferStatus/timeStamp),
+    // which hardware appends to every packet (OHCI §8.4.2).
+    const std::array<uint8_t, 20> responseBytes{
         0x60, 0xC2, 0x01, 0x60,
         0x00, 0x00, 0xC0, 0xFF,
         0x00, 0x00, 0x00, 0x00,
         0x04, 0x20, 0x8F, 0xE2,
+        0x00, 0x00, 0x11, 0x00,
     };
 
     PacketRouter router;

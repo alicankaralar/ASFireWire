@@ -104,20 +104,25 @@ std::optional<ARPacketParser::PacketInfo> ARPacketParser::ParseNext(
         return std::nullopt;
     }
 
-    // 4) Trailer (prefer it, but don't scream if missing)
-    bool haveTrailer = (offset + quadletAlignedLen + 4) <= bufferSize;
-    size_t totalLengthWithTrailer = quadletAlignedLen + (haveTrailer ? 4 : 0);
-
-    // ---- Trailer (LE in memory) - only read if present
-    uint16_t xferStatus = 0;
-    uint16_t timeStamp = 0;
-    if (haveTrailer) {
-        uint32_t trailer_le;
-        __builtin_memcpy(&trailer_le, packetStart + quadletAlignedLen, 4);
-        const uint32_t trailer = OSSwapLittleToHostInt32(trailer_le);
-        xferStatus = static_cast<uint16_t>(trailer >> 16);
-        timeStamp  = static_cast<uint16_t>(trailer & 0xFFFF);
+    // 4) Trailer. OHCI §8.4.2: AR bufferFill appends a status/timestamp trailer
+    // quadlet to EVERY packet — it is never optional. If it is not in the window
+    // yet, the packet is still streaming in: report "incomplete" so the caller
+    // preserves the tail and retries (stitched path) once the trailer lands.
+    // Treating the trailer as optional consumed such packets 4 bytes short; the
+    // late trailer then sat at the head of the unread stream, misaligned every
+    // subsequent parse, and permanently jammed the AR response path (bus-wide
+    // async outage until reboot — cross-validated against the 2026-07-03 trace).
+    if (offset + quadletAlignedLen + 4 > bufferSize) {
+        return std::nullopt;
     }
+    const size_t totalLengthWithTrailer = quadletAlignedLen + 4;
+
+    // ---- Trailer (LE in memory)
+    uint32_t trailer_le;
+    __builtin_memcpy(&trailer_le, packetStart + quadletAlignedLen, 4);
+    const uint32_t trailer = OSSwapLittleToHostInt32(trailer_le);
+    const uint16_t xferStatus = static_cast<uint16_t>(trailer >> 16);
+    const uint16_t timeStamp  = static_cast<uint16_t>(trailer & 0xFFFF);
 
     // ---- rCode (only for response tCodes): extract from Q1 bits[15:12]
     // Per Linux packet-header-definitions.h: ASYNC_HEADER_Q1_RCODE_SHIFT = 12
@@ -134,10 +139,8 @@ std::optional<ARPacketParser::PacketInfo> ARPacketParser::ParseNext(
     }
 
     // Optional guard against garbage (all-zero header + zero trailer)
-    if (offset + 8 <= bufferSize) {
-        if (q0 == 0 && q1 == 0 && (!haveTrailer || (xferStatus == 0 && timeStamp == 0))) {
-            return std::nullopt;
-        }
+    if (q0 == 0 && q1 == 0 && xferStatus == 0 && timeStamp == 0) {
+        return std::nullopt;
     }
 
     PacketInfo info{};
